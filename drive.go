@@ -4,11 +4,11 @@ import (
 	"context"
 	"log"
 
-	"github.com/henrybear327/Proton-API-Bridge/common"
+	"github.com/coderFrankenstain/Proton-API-Bridge/common"
 	"golang.org/x/sync/semaphore"
 
-	"github.com/ProtonMail/gopenpgp/v2/crypto"
 	"github.com/ProtonMail/go-proton-api"
+	"github.com/ProtonMail/gopenpgp/v2/crypto"
 )
 
 type ProtonDrive struct {
