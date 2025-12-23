@@ -35,6 +35,4 @@ require (
 	golang.org/x/text v0.32.0 // indirect
 )
 
-replace github.com/ProtonMail/go-proton-api => github.com/coderFrankenstain/go-proton-api v1.0.2
-
-replace github.com/go-resty/resty/v2 => github.com/LBeernaertProton/resty/v2 v2.0.0-20231129100320-dddf8030d93a
+replace github.com/ProtonMail/go-proton-api => github.com/coderFrankenstain/go-proton-api v1.0.5
