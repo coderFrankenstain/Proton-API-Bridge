@@ -8,14 +8,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"github.com/ProtonMail/gopenpgp/v2/crypto"
+	"github.com/henrybear327/go-proton-api"
 	"io"
 	"mime"
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/ProtonMail/gopenpgp/v2/crypto"
-	"github.com/henrybear327/go-proton-api"
 )
 
 func (protonDrive *ProtonDrive) handleRevisionConflict(ctx context.Context, link *proton.Link, createFileResp *proton.CreateFileRes) (string, bool, error) {
@@ -250,6 +249,30 @@ func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, n
 		return nil, 0, nil, "", ErrMissingInputUploadAndCollectBlockData
 	}
 
+	//先进行verification
+	res, err := protonDrive.c.Verification(ctx, protonDrive.MainShare.ShareID, linkID, revisionID)
+	if err != nil {
+		return nil, 0, nil, "", err
+	}
+
+
+	pktBytes, err := base64.StdEncoding.DecodeString(res.ContentKeyPacket)
+	if err != nil {
+		return nil, 0, nil, "", err
+	}
+
+	pgpMsg := crypto.NewPGPMessage(pktBytes)
+
+	// 用 node keyring / private keyring 解出 session key
+	verifierSK, err := newNodeKR.DecryptSessionKey(pgpMsg.Data) // 伪代码：看你版本实际方法
+	if err != nil {
+		return nil, 0, nil, "", err
+	}
+
+
+	verifCode, err := base64.StdEncoding.DecodeString(res.VerificationCode)
+	if err != nil { return nil, 0, nil, "", err }
+
 	totalFileSize := int64(0)
 
 	pendingUploadBlocks := make([]PendingUploadBlocks, 0)
@@ -365,17 +388,25 @@ func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, n
 		}
 		manifestSignatureData = append(manifestSignatureData, hash...)
 
+
+		verificationToken, err := verifyBlock(verifCode, verifierSK, encData)
+		if err != nil {
+			return nil, 0, nil, "", err
+		}
 		pendingUploadBlocks = append(pendingUploadBlocks, PendingUploadBlocks{
 			blockUploadInfo: proton.BlockUploadInfo{
 				Index:        i, // iOS drive: BE starts with 1
 				Size:         int64(len(encData)),
 				EncSignature: encSignatureStr,
 				Hash:         base64Hash,
+				Verifier: proton.Verifier{
+					Token: verificationToken,
+				},
 			},
 			encData: encData,
 		})
 	}
-	err := uploadPendingBlocks()
+	err = uploadPendingBlocks()
 	if err != nil {
 		return nil, 0, nil, "", err
 	}
@@ -509,3 +540,37 @@ Based on the code below, which is taken from the Proton iOS Drive app, we can in
 	- the server will return available hashes, and the client will take the lowest iteration as the filename to be used
 	- will be used to search for the next available filename (using hashes avoids the filename being known to the server)
 */
+
+func decryptCheck(verifierSK *crypto.SessionKey, encData []byte) error {
+	pgpMsg := crypto.NewPGPMessage(encData)
+	_, err := verifierSK.Decrypt(pgpMsg.Data) // ✅ 如果你的版本有这个
+	if err == nil {
+		return nil
+	}
+	
+	return err 
+
+}
+
+func makeVerificationToken(verificationCode []byte, encData []byte) []byte {
+	out := make([]byte, len(verificationCode))
+	for i := range verificationCode {
+		b := byte(0)
+		if i < len(encData) {
+			b = encData[i]
+		}
+		out[i] = verificationCode[i] ^ b
+	}
+	return out
+}
+
+func verifyBlock(verifCode []byte, verifierSK *crypto.SessionKey, encData []byte) (string, error) {
+	if err := decryptCheck(verifierSK, encData); err != nil {
+		return "", err
+	}
+	tokenBytes := makeVerificationToken(verifCode, encData)
+	return base64.StdEncoding.EncodeToString(tokenBytes), nil
+}
+
+
+
