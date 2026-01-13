@@ -249,12 +249,11 @@ func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, n
 		return nil, 0, nil, "", ErrMissingInputUploadAndCollectBlockData
 	}
 
-	//先进行verification
+	//verification
 	res, err := protonDrive.c.Verification(ctx, protonDrive.MainShare.ShareID, linkID, revisionID)
 	if err != nil {
 		return nil, 0, nil, "", err
 	}
-
 
 	pktBytes, err := base64.StdEncoding.DecodeString(res.ContentKeyPacket)
 	if err != nil {
@@ -263,15 +262,16 @@ func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, n
 
 	pgpMsg := crypto.NewPGPMessage(pktBytes)
 
-	// 用 node keyring / private keyring 解出 session key
-	verifierSK, err := newNodeKR.DecryptSessionKey(pgpMsg.Data) // 伪代码：看你版本实际方法
+	// Use the node keyring / private keyring to decrypt the session key
+	verifierSK, err := newNodeKR.DecryptSessionKey(pgpMsg.Data)
 	if err != nil {
 		return nil, 0, nil, "", err
 	}
 
-
 	verifCode, err := base64.StdEncoding.DecodeString(res.VerificationCode)
-	if err != nil { return nil, 0, nil, "", err }
+	if err != nil {
+		return nil, 0, nil, "", err
+	}
 
 	totalFileSize := int64(0)
 
@@ -387,7 +387,6 @@ func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, n
 			return nil, 0, nil, "", err
 		}
 		manifestSignatureData = append(manifestSignatureData, hash...)
-
 
 		verificationToken, err := verifyBlock(verifCode, verifierSK, encData)
 		if err != nil {
@@ -543,12 +542,12 @@ Based on the code below, which is taken from the Proton iOS Drive app, we can in
 
 func decryptCheck(verifierSK *crypto.SessionKey, encData []byte) error {
 	pgpMsg := crypto.NewPGPMessage(encData)
-	_, err := verifierSK.Decrypt(pgpMsg.Data) // ✅ 如果你的版本有这个
+	_, err := verifierSK.Decrypt(pgpMsg.Data)
 	if err == nil {
 		return nil
 	}
-	
-	return err 
+
+	return err
 
 }
 
@@ -571,6 +570,3 @@ func verifyBlock(verifCode []byte, verifierSK *crypto.SessionKey, encData []byte
 	tokenBytes := makeVerificationToken(verifCode, encData)
 	return base64.StdEncoding.EncodeToString(tokenBytes), nil
 }
-
-
-
