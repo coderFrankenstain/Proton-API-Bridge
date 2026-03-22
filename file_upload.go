@@ -23,6 +23,17 @@ func (protonDrive *ProtonDrive) handleRevisionConflict(ctx context.Context, link
 
 		draftRevision, err := protonDrive.GetRevisions(ctx, link, proton.RevisionStateDraft)
 		if err != nil {
+			// If we can't list revisions but the link is already in draft state
+			// (e.g. a broken/incomplete upload from a previous failed attempt)
+			// and the user wants to replace existing drafts, delete the link and
+			// let the caller retry from scratch rather than failing outright.
+			if protonDrive.Config.ReplaceExistingDraft && link.State == proton.LinkStateDraft {
+				err = protonDrive.c.DeleteChildren(ctx, protonDrive.MainShare.ShareID, link.ParentLinkID, linkID)
+				if err != nil {
+					return "", false, err
+				}
+				return "", true, nil
+			}
 			return "", false, err
 		}
 
