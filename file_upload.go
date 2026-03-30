@@ -286,6 +286,8 @@ func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, n
 
 	totalFileSize := int64(0)
 
+	const tokenExpirationTime = 3 * time.Hour
+
 	pendingUploadBlocks := make([]PendingUploadBlocks, 0)
 	manifestSignatureData := make([]byte, 0)
 	uploadPendingBlocks := func() error {
@@ -305,37 +307,88 @@ func (protonDrive *ProtonDrive) uploadAndCollectBlockData(ctx context.Context, n
 
 			BlockList: blockList,
 		}
+		tokenObtainedAt := time.Now()
 		blockUploadResp, err := protonDrive.c.RequestBlockUpload(ctx, blockUploadReq)
 		if err != nil {
 			return err
 		}
 
-		errChan := make(chan error)
-		uploadBlockWrapper := func(ctx context.Context, errChan chan error, bareURL, token string, block io.Reader) {
-			// log.Println("Before semaphore")
+		// Use buffered channel to prevent goroutine leaks when errors occur
+		errChan := make(chan error, len(blockUploadResp))
+
+		// Use a cancellable context so remaining uploads can be cancelled on first error
+		uploadCtx, cancelUpload := context.WithCancel(ctx)
+		defer cancelUpload()
+
+		uploadBlockWrapper := func(ctx context.Context, errChan chan error, blockIdx int, bareURL, token string, encData []byte) {
 			if err := protonDrive.blockUploadSemaphore.Acquire(ctx, 1); err != nil {
 				errChan <- err
+				return // Must return to avoid Release without Acquire and double-send to errChan
 			}
 			defer protonDrive.blockUploadSemaphore.Release(1)
-			// log.Println("After semaphore")
-			// defer log.Println("Release semaphore")
 
-			errChan <- protonDrive.c.UploadBlock(ctx, bareURL, token, block)
+			currentURL := bareURL
+			currentToken := token
+
+			// Retry at the Bridge layer with fresh bytes.NewReader each time.
+			// This is necessary because Resty's built-in retry cannot re-read a consumed io.Reader,
+			// which would cause silent data corruption or EOF on retry.
+			const maxRetries = 3
+			var lastErr error
+			for attempt := 0; attempt <= maxRetries; attempt++ {
+				if ctx.Err() != nil {
+					errChan <- ctx.Err()
+					return
+				}
+
+				// Check if the block upload token has expired (WebClients uses 3 hours).
+				// If expired, request a fresh token for this single block.
+				if time.Since(tokenObtainedAt) > tokenExpirationTime {
+					refreshReq := proton.BlockUploadReq{
+						AddressID:  protonDrive.MainShare.AddressID,
+						ShareID:    protonDrive.MainShare.ShareID,
+						LinkID:     linkID,
+						RevisionID: revisionID,
+						BlockList:  []proton.BlockUploadInfo{pendingUploadBlocks[blockIdx].blockUploadInfo},
+					}
+					refreshResp, refreshErr := protonDrive.c.RequestBlockUpload(ctx, refreshReq)
+					if refreshErr != nil {
+						errChan <- refreshErr
+						return
+					}
+					if len(refreshResp) > 0 {
+						currentURL = refreshResp[0].BareURL
+						currentToken = refreshResp[0].Token
+					}
+				}
+
+				lastErr = protonDrive.c.UploadBlock(ctx, currentURL, currentToken, bytes.NewReader(encData))
+				if lastErr == nil {
+					errChan <- nil
+					return
+				}
+				if attempt < maxRetries {
+					time.Sleep(time.Duration(attempt+1) * time.Second)
+				}
+			}
+			errChan <- lastErr
 		}
 		for i := range blockUploadResp {
-			go uploadBlockWrapper(ctx, errChan, blockUploadResp[i].BareURL, blockUploadResp[i].Token, bytes.NewReader(pendingUploadBlocks[i].encData))
+			go uploadBlockWrapper(uploadCtx, errChan, i, blockUploadResp[i].BareURL, blockUploadResp[i].Token, pendingUploadBlocks[i].encData)
 		}
 
+		// Collect ALL results to ensure every goroutine completes and releases its semaphore
+		var firstErr error
 		for i := 0; i < len(blockUploadResp); i++ {
-			err := <-errChan
-			if err != nil {
-				return err
+			if err := <-errChan; err != nil && firstErr == nil {
+				firstErr = err
+				cancelUpload() // Signal remaining uploads to abort
 			}
 		}
 
 		pendingUploadBlocks = pendingUploadBlocks[:0]
 
-		return nil
+		return firstErr
 	}
 
 	shouldContinue := true

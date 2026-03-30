@@ -10,6 +10,8 @@ require (
 	golang.org/x/sync v0.3.0
 )
 
+replace github.com/henrybear327/go-proton-api => ../go-proton-api
+
 require (
 	github.com/ProtonMail/bcrypt v0.0.0-20211005172633-e235017c1baf // indirect
 	github.com/ProtonMail/go-crypto v0.0.0-20230828082145-3c4c8a2d2371 // indirect
