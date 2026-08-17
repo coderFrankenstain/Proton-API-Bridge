@@ -24,6 +24,18 @@ type Config struct {
 	ConcurrentBlockUploadCount     int
 	ConcurrentFileCryptoCount      int
 
+	/* Staged upload (large files)
+	Mirrors the official macOS client pipeline (encrypt-to-disk first, then
+	upload with per-block retries) so that a transient upload failure never
+	requires re-reading the source stream. Files whose size is known and
+	>= StagedUploadCutoffBytes are encrypted to StagedUploadDir before any
+	block is uploaded; smaller files (or unknown sizes) keep the streaming
+	pipeline. Set StagedUploadCutoffBytes <= 0 to disable staging entirely. */
+	StagedUploadCutoffBytes  int64  // minimum known file size to use the staged pipeline
+	StagedUploadDir          string // staging root; empty means <os.TempDir()>/proton-api-bridge-staged
+	StagedUploadMinFreeBytes int64  // extra free-disk headroom required beyond the file size
+	StagedUploadMaxRounds    int    // upload retry rounds over the staged blocks
+
 	/* Drive */
 	DataFolderName string
 }
@@ -68,6 +80,11 @@ func NewConfigWithDefaultValues() *Config {
 		EnableCaching:                  true,
 		ConcurrentBlockUploadCount:     20, // let's be a nice citizen and not stress out proton engineers :)
 		ConcurrentFileCryptoCount:      runtime.GOMAXPROCS(0),
+
+		StagedUploadCutoffBytes:  1 << 30, // 1 GiB
+		StagedUploadDir:          "",
+		StagedUploadMinFreeBytes: 5 << 30, // 5 GiB
+		StagedUploadMaxRounds:    5,
 
 		DataFolderName: "data",
 	}

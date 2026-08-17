@@ -511,7 +511,11 @@ func (protonDrive *ProtonDrive) commitNewRevision(ctx context.Context, nodeKR *c
 // 0 = normal mode
 // 1 = up to create revision
 // 2 = up to block upload
-func (protonDrive *ProtonDrive) uploadFile(ctx context.Context, parentLink *proton.Link, filename string, modTime time.Time, file io.Reader, testParam int) (string, *proton.RevisionXAttrCommon, error) {
+//
+// knownSize is the source size in bytes when the caller knows it, or -1. It is
+// only used to decide between the staged (encrypt-to-disk first) and the
+// streaming upload pipeline.
+func (protonDrive *ProtonDrive) uploadFile(ctx context.Context, parentLink *proton.Link, filename string, modTime time.Time, file io.Reader, knownSize int64, testParam int) (string, *proton.RevisionXAttrCommon, error) {
 	// TODO: if we should use github.com/gabriel-vasile/mimetype to detect the MIME type from the file content itself
 	// Note: this approach might cause the upload progress to display the "fake" progress, since we read in all the content all-at-once
 	// mimetype.SetLimit(0)
@@ -536,7 +540,17 @@ func (protonDrive *ProtonDrive) uploadFile(ctx context.Context, parentLink *prot
 	}
 
 	/* step 2: upload blocks and collect block data */
-	manifestSignature, fileSize, blockSizes, digests, err := protonDrive.uploadAndCollectBlockData(ctx, newSessionKey, newNodeKR, file, linkID, revisionID)
+	var (
+		manifestSignature []byte
+		fileSize          int64
+		blockSizes        []int64
+		digests           string
+	)
+	if stagingDir, ok := protonDrive.prepareStagedUpload(knownSize); ok {
+		manifestSignature, fileSize, blockSizes, digests, err = protonDrive.uploadAndCollectBlockDataStaged(ctx, newSessionKey, newNodeKR, file, linkID, revisionID, stagingDir)
+	} else {
+		manifestSignature, fileSize, blockSizes, digests, err = protonDrive.uploadAndCollectBlockData(ctx, newSessionKey, newNodeKR, file, linkID, revisionID)
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -565,12 +579,20 @@ func (protonDrive *ProtonDrive) uploadFile(ctx context.Context, parentLink *prot
 }
 
 func (protonDrive *ProtonDrive) UploadFileByReader(ctx context.Context, parentLinkID string, filename string, modTime time.Time, file io.Reader, testParam int) (string, *proton.RevisionXAttrCommon, error) {
+	return protonDrive.UploadFileByReaderWithSize(ctx, parentLinkID, filename, modTime, file, -1, testParam)
+}
+
+// UploadFileByReaderWithSize is UploadFileByReader with the source size passed
+// in when the caller knows it (-1 if unknown). Knowing the size up front lets
+// large files use the staged pipeline (see file_upload_staged.go), which never
+// needs to re-read the source stream on retry.
+func (protonDrive *ProtonDrive) UploadFileByReaderWithSize(ctx context.Context, parentLinkID string, filename string, modTime time.Time, file io.Reader, knownSize int64, testParam int) (string, *proton.RevisionXAttrCommon, error) {
 	parentLink, err := protonDrive.getLink(ctx, parentLinkID)
 	if err != nil {
 		return "", nil, err
 	}
 
-	return protonDrive.uploadFile(ctx, parentLink, filename, modTime, file, testParam)
+	return protonDrive.uploadFile(ctx, parentLink, filename, modTime, file, knownSize, testParam)
 }
 
 func (protonDrive *ProtonDrive) UploadFileByPath(ctx context.Context, parentLink *proton.Link, filename string, filePath string, testParam int) (string, *proton.RevisionXAttrCommon, error) {
@@ -587,7 +609,7 @@ func (protonDrive *ProtonDrive) UploadFileByPath(ctx context.Context, parentLink
 
 	in := bufio.NewReader(f)
 
-	return protonDrive.uploadFile(ctx, parentLink, filename, info.ModTime(), in, testParam)
+	return protonDrive.uploadFile(ctx, parentLink, filename, info.ModTime(), in, info.Size(), testParam)
 }
 
 /*
