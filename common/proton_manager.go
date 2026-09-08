@@ -4,12 +4,15 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/henrybear327/go-proton-api"
 )
 
-func getProtonManager(appVersion string, userAgent string) *proton.Manager {
+// getProtonManager builds the API manager. loginProxy may be nil; when set,
+// requests marked with WithLoginProxy are routed through it (see login_proxy.go).
+func getProtonManager(appVersion string, userAgent string, loginProxy *url.URL) *proton.Manager {
 	/* Notes on API calls: if the app version is not specified, the api calls will be rejected. */
 	// ForceAttemptHTTP2 is required: setting DialContext or TLSClientConfig
 	// causes Go's http.Transport to conservatively disable HTTP/2. Without
@@ -31,10 +34,15 @@ func getProtonManager(appVersion string, userAgent string) *proton.Manager {
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 
+	var roundTripper http.RoundTripper = transport
+	if loginProxy != nil {
+		roundTripper = newLoginProxyRouter(transport, loginProxy)
+	}
+
 	options := []proton.Option{
 		proton.WithAppVersion(appVersion),
 		proton.WithUserAgent(userAgent),
-		proton.WithTransport(transport),
+		proton.WithTransport(roundTripper),
 	}
 	m := proton.New(options...)
 

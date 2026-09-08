@@ -16,6 +16,14 @@ type Config struct {
 	UseReusableLogin     bool
 	CredentialCacheFile  string // If CredentialCacheFile is empty, no credential will be logged
 
+	/* Login proxy
+	When non-empty, only the password-login flow (SRP auth, 2FA, user /
+	address / salt fetch and the Drive bootstrap) is sent through this proxy
+	(an http, https, socks5 or socks5h URL, credentials allowed in the URL).
+	Reusable-credential logins, token refreshes and all Drive data traffic
+	stay on the direct connection. See login_proxy.go for the rationale. */
+	LoginProxyURL string
+
 	/* Setting */
 	DestructiveIntegrationTest     bool // CAUTION: the integration test requires a clean proton drive
 	EmptyTrashAfterIntegrationTest bool // CAUTION: the integration test will clean up all the data in the trash
@@ -73,6 +81,7 @@ func NewConfigWithDefaultValues() *Config {
 		},
 		UseReusableLogin:    false,
 		CredentialCacheFile: "",
+		LoginProxyURL:       "",
 
 		DestructiveIntegrationTest:     false,
 		EmptyTrashAfterIntegrationTest: false,
@@ -127,6 +136,7 @@ func NewConfigForIntegrationTests() *Config {
 		},
 		UseReusableLogin:    useReusableLogin,
 		CredentialCacheFile: ".credential",
+		LoginProxyURL:       os.Getenv("PROTON_API_BRIDGE_LOGIN_PROXY_URL"),
 
 		DestructiveIntegrationTest:     true,
 		EmptyTrashAfterIntegrationTest: true,

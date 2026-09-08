@@ -55,7 +55,11 @@ func Login(ctx context.Context, config *Config, authHandler proton.AuthHandler, 
 	var addrs map[string]proton.Address
 
 	// get manager
-	m := getProtonManager(config.AppVersion, config.UserAgent)
+	loginProxy, err := config.loginProxyURL()
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, err
+	}
+	m := getProtonManager(config.AppVersion, config.UserAgent, loginProxy)
 
 	if config.UseReusableLogin {
 		c = m.NewClient(config.ReusableCredential.UID, config.ReusableCredential.AccessToken, config.ReusableCredential.RefreshToken)

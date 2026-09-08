@@ -20,6 +20,10 @@ type ProtonDrive struct {
 
 	Config *common.Config
 
+	// LoginProxyStats is set when the password login went through
+	// Config.LoginProxyURL; nil for reusable-credential logins or no proxy.
+	LoginProxyStats *common.LoginProxyStats
+
 	c                *proton.Client
 	m                *proton.Manager
 	userKR           *crypto.KeyRing
@@ -37,6 +41,14 @@ func NewDefaultConfig() *common.Config {
 }
 
 func NewProtonDrive(ctx context.Context, config *common.Config, authHandler proton.AuthHandler, deAuthHandler proton.Handler) (*ProtonDrive, *common.ProtonDriveCredential, error) {
+	// Route the whole password-login flow, up to and including the Drive
+	// bootstrap below, through the login proxy. ctx is not retained by the
+	// returned ProtonDrive, so later calls go direct again (see login_proxy.go).
+	var loginProxyStats *common.LoginProxyStats
+	if config.LoginProxyURL != "" && !config.UseReusableLogin {
+		ctx, loginProxyStats = common.WithLoginProxy(ctx)
+	}
+
 	/* Log in and logout */
 	m, c, credentials, userKR, addrKRs, addrData, err := common.Login(ctx, config, authHandler, deAuthHandler)
 	if err != nil {
@@ -138,6 +150,8 @@ func NewProtonDrive(ctx context.Context, config *common.Config, authHandler prot
 		DefaultAddrKR: mainShareAddrKR,
 
 		Config: config,
+
+		LoginProxyStats: loginProxyStats,
 
 		c:                c,
 		m:                m,
